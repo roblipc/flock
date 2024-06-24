@@ -1,70 +1,258 @@
 <!DOCTYPE html>
-<html lang="fr">
+<html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Détection d'objets en temps réel avec TensorFlow.js</title>
-    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs"></script>
-    <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd"></script>
+    <title>Enhanced Bird Flocking Simulation</title>
     <style>
-        body { margin: 0; padding: 0; width: 100vw; height: 100vh; overflow: hidden; }
-        #video, #canvas { position: absolute; width: 100%; height: 100%; object-fit: cover; }
+        body {
+            margin: 0;
+            overflow: hidden;
+            background-color: #1a1a1a;
+            font-family: Arial, sans-serif;
+        }
+        canvas {
+            display: block;
+        }
+        #controls {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            color: white;
+            background-color: rgba(0, 0, 0, 0.5);
+            padding: 10px;
+            border-radius: 5px;
+        }
+        input[type="range"] {
+            width: 100px;
+        }
+        #mouseStatus {
+            color: #ffff00;
+            font-weight: bold;
+        }
     </style>
 </head>
 <body>
-    <video id="video" playsinline></video>
-    <canvas id="canvas"></canvas>
-
+    <canvas id="flockCanvas"></canvas>
+    <div id="controls">
+        <div>Birds: <span id="birdCount">100</span> <input type="range" id="birdSlider" min="10" max="500" value="100"></div>
+        <div>Alignment: <input type="range" id="alignmentSlider" min="0" max="100" value="50"></div>
+        <div>Cohesion: <input type="range" id="cohesionSlider" min="0" max="100" value="50"></div>
+        <div>Separation: <input type="range" id="separationSlider" min="0" max="100" value="50"></div>
+        <div>Mouse Influence: <input type="range" id="mouseSlider" min="0" max="100" value="50"></div>
+        <div><input type="checkbox" id="predatorToggle"> Enable Predator</div>
+        <div><button id="colorButton">Change Colors</button></div>
+        <div>Press SPACE to toggle mouse influence</div>
+        <div id="mouseStatus">Mouse Influence: Active</div>
+    </div>
     <script>
-        const video = document.getElementById('video');
-        const canvas = document.getElementById('canvas');
+        const canvas = document.getElementById('flockCanvas');
         const ctx = canvas.getContext('2d');
+        canvas.width = window.innerWidth;
+        canvas.height = window.innerHeight;
 
-        let model;
+        let mouseX = canvas.width / 2;
+        let mouseY = canvas.height / 2;
+        let predator = null;
+        let mouseInfluenceActive = true;
 
-        // Chargement du modèle
-        async function loadModel() {
-            model = await cocoSsd.load();
-            console.log('Modèle chargé');
-            startCamera();
+        let birdColor = '#ffffff';
+        let backgroundColor = '#1a1a1a';
+
+        class Bird {
+            constructor() {
+                this.x = Math.random() * canvas.width;
+                this.y = Math.random() * canvas.height;
+                this.vx = Math.random() * 4 - 2;
+                this.vy = Math.random() * 4 - 2;
+                this.size = 3;
+            }
+
+            update(flock) {
+                this.align(flock);
+                this.cohere(flock);
+                this.separate(flock);
+                if (mouseInfluenceActive) this.followMouse();
+                if (predator) this.avoidPredator();
+
+                let speed = Math.sqrt(this.vx * this.vx + this.vy * this.vy);
+                if (speed > 5) {
+                    this.vx = (this.vx / speed) * 5;
+                    this.vy = (this.vy / speed) * 5;
+                }
+
+                this.x += this.vx;
+                this.y += this.vy;
+
+                this.x = (this.x + canvas.width) % canvas.width;
+                this.y = (this.y + canvas.height) % canvas.height;
+            }
+
+            align(flock) {
+                let avgVx = 0, avgVy = 0, count = 0;
+                for (let bird of flock) {
+                    if (bird !== this && this.distance(bird) < 50) {
+                        avgVx += bird.vx;
+                        avgVy += bird.vy;
+                        count++;
+                    }
+                }
+                if (count > 0) {
+                    avgVx /= count;
+                    avgVy /= count;
+                    this.vx += (avgVx - this.vx) * alignmentSlider.value / 1000;
+                    this.vy += (avgVy - this.vy) * alignmentSlider.value / 1000;
+                }
+            }
+
+            cohere(flock) {
+                let avgX = 0, avgY = 0, count = 0;
+                for (let bird of flock) {
+                    if (bird !== this && this.distance(bird) < 50) {
+                        avgX += bird.x;
+                        avgY += bird.y;
+                        count++;
+                    }
+                }
+                if (count > 0) {
+                    avgX /= count;
+                    avgY /= count;
+                    this.vx += (avgX - this.x) * cohesionSlider.value / 10000;
+                    this.vy += (avgY - this.y) * cohesionSlider.value / 10000;
+                }
+            }
+
+            separate(flock) {
+                for (let bird of flock) {
+                    if (bird !== this) {
+                        let dist = this.distance(bird);
+                        if (dist < 20) {
+                            this.vx += (this.x - bird.x) * separationSlider.value / 1000;
+                            this.vy += (this.y - bird.y) * separationSlider.value / 1000;
+                        }
+                    }
+                }
+            }
+
+            followMouse() {
+                let dx = mouseX - this.x;
+                let dy = mouseY - this.y;
+                let dist = Math.sqrt(dx*dx + dy*dy);
+                this.vx += (dx / dist) * mouseSlider.value / 1000;
+                this.vy += (dy / dist) * mouseSlider.value / 1000;
+            }
+
+            avoidPredator() {
+                let dx = this.x - predator.x;
+                let dy = this.y - predator.y;
+                let dist = Math.sqrt(dx*dx + dy*dy);
+                if (dist < 100) {
+                    this.vx += (dx / dist) * 0.5;
+                    this.vy += (dy / dist) * 0.5;
+                }
+            }
+
+            distance(other) {
+                let dx = this.x - other.x;
+                let dy = this.y - other.y;
+                return Math.sqrt(dx*dx + dy*dy);
+            }
+
+            draw() {
+                ctx.fillStyle = birdColor;
+                ctx.beginPath();
+                ctx.arc(this.x, this.y, this.size, 0, 2 * Math.PI);
+                ctx.fill();
+            }
         }
 
-        // Démarrage de la caméra
-        async function startCamera() {
-            const stream = await navigator.mediaDevices.getUserMedia({
-                video: { facingMode: 'environment' },
-                audio: false
-            });
-            video.srcObject = stream;
-            video.onloadedmetadata = () => {
-                video.play();
-                canvas.width = video.videoWidth;
-                canvas.height = video.videoHeight;
-                detectFrame();
-            };
+        class Predator {
+            constructor() {
+                this.x = Math.random() * canvas.width;
+                this.y = Math.random() * canvas.height;
+                this.vx = Math.random() * 2 - 1;
+                this.vy = Math.random() * 2 - 1;
+                this.size = 8;
+            }
+
+            update() {
+                this.x += this.vx;
+                this.y += this.vy;
+
+                if (this.x < 0 || this.x > canvas.width) this.vx *= -1;
+                if (this.y < 0 || this.y > canvas.height) this.vy *= -1;
+            }
+
+            draw() {
+                ctx.fillStyle = 'red';
+                ctx.beginPath();
+                ctx.arc(this.x, this.y, this.size, 0, 2 * Math.PI);
+                ctx.fill();
+            }
         }
 
-        // Détection d'objets sur chaque frame
-        async function detectFrame() {
-            ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-            const predictions = await model.detect(video);
+        let flock = Array(100).fill().map(() => new Bird());
 
-            predictions.forEach(prediction => {
-                const [x, y, width, height] = prediction.bbox;
-                ctx.strokeStyle = '#00FF00';
-                ctx.lineWidth = 2;
-                ctx.strokeRect(x, y, width, height);
+        function animate() {
+            ctx.fillStyle = backgroundColor;
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-                ctx.fillStyle = '#00FF00';
-                ctx.font = '16px Arial';
-                ctx.fillText(`${prediction.class} (${Math.round(prediction.score * 100)}%)`, x, y > 20 ? y - 5 : y + 20);
-            });
+            for (let bird of flock) {
+                bird.update(flock);
+                bird.draw();
+            }
 
-            requestAnimationFrame(detectFrame);
+            if (predator) {
+                predator.update();
+                predator.draw();
+            }
+
+            requestAnimationFrame(animate);
         }
 
-        // Démarrage de l'application
-        loadModel();
+        canvas.addEventListener('mousemove', (event) => {
+            mouseX = event.clientX;
+            mouseY = event.clientY;
+        });
+
+        window.addEventListener('resize', () => {
+            canvas.width = window.innerWidth;
+            canvas.height = window.innerHeight;
+        });
+
+        const birdSlider = document.getElementById('birdSlider');
+        const birdCount = document.getElementById('birdCount');
+        const alignmentSlider = document.getElementById('alignmentSlider');
+        const cohesionSlider = document.getElementById('cohesionSlider');
+        const separationSlider = document.getElementById('separationSlider');
+        const mouseSlider = document.getElementById('mouseSlider');
+        const predatorToggle = document.getElementById('predatorToggle');
+        const colorButton = document.getElementById('colorButton');
+        const mouseStatus = document.getElementById('mouseStatus');
+
+        birdSlider.addEventListener('input', () => {
+            const count = parseInt(birdSlider.value);
+            birdCount.textContent = count;
+            flock = Array(count).fill().map(() => new Bird());
+        });
+
+        predatorToggle.addEventListener('change', () => {
+            predator = predatorToggle.checked ? new Predator() : null;
+        });
+
+        colorButton.addEventListener('click', () => {
+            birdColor = '#' + Math.floor(Math.random()*16777215).toString(16);
+            backgroundColor = '#' + Math.floor(Math.random()*16777215).toString(16);
+        });
+
+        document.addEventListener('keydown', (event) => {
+            if (event.code === 'Space') {
+                mouseInfluenceActive = !mouseInfluenceActive;
+                mouseStatus.textContent = `Mouse Influence: ${mouseInfluenceActive ? 'Active' : 'Inactive'}`;
+            }
+        });
+
+        animate();
     </script>
 </body>
 </html>
